@@ -18,7 +18,7 @@ docker run -d --name ninfer \
   ghcr.io/yorkane/ninfer-4090:latest
 ```
 
-The entrypoint enables vision, MTP speculative decoding, and automatic KV capacity sizing; every knob is overridable via environment variables (e.g. `NINFER_MAX_CONTEXT`, `NINFER_KV_DTYPE`, `NINFER_CONC`). See `deploy.md` for model download, verification, and tuning details.
+The entrypoint enables vision, MTP speculative decoding, and automatic KV capacity sizing; every knob is overridable via environment variables (e.g. `NINFER_MAX_CONTEXT`, `NINFER_KV_DTYPE`, `NINFER_CONC`). See [docs/deploy.md](docs/deploy.md) for model download, verification, and tuning details.
 
 ---
 

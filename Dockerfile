@@ -45,7 +45,7 @@ LABEL org.opencontainers.image.title="ninfer-4090" \
       org.opencontainers.image.description="NInfer sm_89 inference server for Qwen3.6-35B-A3B (vision, MTP, rk4v4-e8 KV)" \
       org.opencontainers.image.source="https://github.com/yorkane/ninfer-4090" \
       org.opencontainers.image.url="https://github.com/yorkane/ninfer-4090" \
-      org.opencontainers.image.documentation="https://github.com/yorkane/ninfer-4090/blob/main/deploy.md" \
+      org.opencontainers.image.documentation="https://github.com/yorkane/ninfer-4090/blob/main/docs/deploy.md" \
       org.opencontainers.image.licenses="Apache-2.0"
 
 ARG DEBIAN_FRONTEND=noninteractive

@@ -877,7 +877,9 @@ docker logs --tail 200 ninfer
 
 ## 14. 参考
 
-- 架构与模型维护文档（英文，面向维护者）：docs/maintainer/，包括并发推理架构、分页 KV 缓存、Op 准入与契约、ReplaySSM GDN、E8 张量格式、存储布局、各 Qwen 模型/artifact 契约
+> 本节及全文中的仓库路径均相对**仓库根目录**。
+
+- 架构与模型维护文档（英文，面向维护者）：[`maintainer/`](maintainer/)，包括并发推理架构、分页 KV 缓存、Op 准入与契约、ReplaySSM GDN、E8 张量格式、存储布局、各 Qwen 模型/artifact 契约
 - CLI 示例集：examples/cli/（文本、多模态、thinking、长解码、长上下文输入及 manifest.json）
 - 基准工具：bench/、tools/bench/
 - 仓库 README（英文）：构建说明与 4090 基准矩阵
