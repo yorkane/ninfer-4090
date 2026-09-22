@@ -150,7 +150,7 @@ Mount the directory holding the .ninfer file, e.g.
 | `NINFER_VISION_MAX_TOKENS` | `65536` | `--vision-max-tokens` | 视觉展开后的 token 上限；喂超大图/长视频且显存紧张时调小 |
 | `NINFER_MAX_MEDIA_ITEMS` | `64` | `--max-media-items` | 单请求媒体条目数上限；批量多图按需调大 |
 | `NINFER_MAX_VIDEO_PIXELS` | `4294967296`（2^32） | `--max-video-pixels` | 视频总像素预算（所有帧合计）；长视频显存不够时调小 |
-| `NINFER_VIDEO_MAX_PIXELS` | `67108864`（约 64M） | `--video-max-pixels` | 单帧 resize 上限；设 `0` 表示不额外限制，沿用 artifact 内 `video_preprocessor_config.json` 配置 |
+| `NINFER_VIDEO_MAX_PIXELS` | `67108864`（64 MP） | `--video-max-pixels` | 采样后**所有保留帧的合计像素体积**上限（会按各帧摊分，从而决定每帧清晰度）；设 `0` 表示沿用 artifact 内 `video_preprocessor_config.json` 的值。注意它不改变视觉显存上限，要同时调 `NINFER_VISION_MAX_TOKENS` 才能放大显存预算 |
 | `NINFER_DRAFT_TOKENS` | `3` | `--draft-tokens` | MTP 每轮 draft token 数（1..15）；调大提速但接受率下降，3 是较稳默认 |
 | `NINFER_PREFILL_CHUNK` | `1024` | `--prefill-chunk` | prefill 分块大小（128 的倍数）；一般不用动 |
 | `NINFER_MODEL_ID` | `qwen3.6-35b-a3b` | `--model-id` | 对外公开模型别名，请求 `model` 字段必须与它一致；接入要求特定 model 名的客户端时改它 |
@@ -307,4 +307,3 @@ docker build -t ninfer-4090:local .
 ---
 
 *本文档依据仓库中 `entrypoint.sh`、`Dockerfile`、`docs/serving.md`、`README.md` 的实际内容编写；标注"以实际为准"处请以你机器上的真实输出为准。*
-
