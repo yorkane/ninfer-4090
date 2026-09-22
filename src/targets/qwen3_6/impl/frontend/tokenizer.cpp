@@ -643,12 +643,26 @@ std::vector<int> Tokenizer::encode(std::string_view text, EncodeOptions options)
 
     std::vector<int> ids;
     std::size_t pos = 0;
+    // Media placeholders repeat one added token hundreds of times, so rescanning
+    // the whole tail for every added token on every hit is quadratic. Keep each
+    // token's next occurrence and only advance it once the cursor passes it,
+    // which makes the scan monotonic over the text.
+    std::vector<std::size_t> next_match(added_tokens_.size(), std::string_view::npos);
+    for (std::size_t i = 0; i < added_tokens_.size(); ++i) {
+        if (!added_tokens_[i].content.empty()) {
+            next_match[i] = text.find(added_tokens_[i].content, 0);
+        }
+    }
     while (pos < text.size()) {
         std::size_t match_pos         = std::string_view::npos;
         const AddedToken* match_token = nullptr;
-        for (const AddedToken& token : added_tokens_) {
+        for (std::size_t i = 0; i < added_tokens_.size(); ++i) {
+            const AddedToken& token = added_tokens_[i];
             if (token.content.empty()) { continue; }
-            const std::size_t found = text.find(token.content, pos);
+            if (next_match[i] < pos) {
+                next_match[i] = text.find(token.content, pos);
+            }
+            const std::size_t found = next_match[i];
             if (found == std::string_view::npos) { continue; }
             if (match_token == nullptr || found < match_pos) {
                 match_pos   = found;

@@ -2,12 +2,16 @@
 
 #include "media/decode/decode.h"
 #include "targets/qwen3_6/impl/frontend/digest.h"
+#include "targets/qwen3_6/impl/frontend/parallel_for.h"
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <iomanip>
 #include <iterator>
 #include <limits>
@@ -20,6 +24,22 @@
 
 namespace ninfer::targets::qwen3_6::frontend_internal {
 namespace {
+
+struct StageTimer {
+    const char* label;
+    std::chrono::steady_clock::time_point t0;
+    static bool enabled() {
+        static const bool on = std::getenv("NINFER_PREP_TRACE") != nullptr;
+        return on;
+    }
+    explicit StageTimer(const char* l) : label(l), t0(std::chrono::steady_clock::now()) {}
+    ~StageTimer() {
+        if (!enabled()) { return; }
+        const double ms = std::chrono::duration<double, std::milli>(
+                              std::chrono::steady_clock::now() - t0).count();
+        std::fprintf(stderr, "[prep-trace] %-22s %8.2f ms\n", label, ms);
+    }
+};
 
 constexpr int kPatchFeatures            = 3 * kTemporal * kPatch * kPatch;
 constexpr int kImageToken               = 248056;
@@ -144,12 +164,45 @@ Coefficients coefficients(int input, int output) {
     return out;
 }
 
+namespace {
+void resize_bicubic_rows(const media::decode::Image& input, Size size, const Coefficients& horizontal,
+                         const Coefficients& vertical, std::vector<std::uint8_t>& temp,
+                         media::decode::Image& out, bool parallel, unsigned workers);
+} // namespace
+
+media::decode::Image resize_bicubic_serial(const media::decode::Image& input, Size size) {
+    if (input.width == size.w && input.height == size.h) { return input; }
+    const Coefficients horizontal = coefficients(input.width, size.w);
+    const Coefficients vertical   = coefficients(input.height, size.h);
+    std::vector<std::uint8_t> temp(static_cast<std::size_t>(input.height) * size.w * 3);
+    media::decode::Image out;
+    out.width  = size.w;
+    out.height = size.h;
+    out.rgb.resize(static_cast<std::size_t>(size.h) * size.w * 3);
+    resize_bicubic_rows(input, size, horizontal, vertical, temp, out, false, 1);
+    return out;
+}
+
 media::decode::Image resize_bicubic(const media::decode::Image& input, Size size) {
     if (input.width == size.w && input.height == size.h) { return input; }
     const Coefficients horizontal = coefficients(input.width, size.w);
     const Coefficients vertical   = coefficients(input.height, size.h);
     std::vector<std::uint8_t> temp(static_cast<std::size_t>(input.height) * size.w * 3);
-    for (int y = 0; y < input.height; ++y) {
+    media::decode::Image out;
+    out.width  = size.w;
+    out.height = size.h;
+    out.rgb.resize(static_cast<std::size_t>(size.h) * size.w * 3);
+    resize_bicubic_rows(input, size, horizontal, vertical, temp, out, true, kMediaParallelWorkers);
+    return out;
+}
+
+namespace {
+void resize_bicubic_rows(const media::decode::Image& input, Size size, const Coefficients& horizontal,
+                         const Coefficients& vertical, std::vector<std::uint8_t>& temp,
+                         media::decode::Image& out, bool parallel, unsigned workers) {
+    // Each destination row only reads the source row it maps to, so rows are
+    // independent and split cleanly across cores.
+    auto first_pass = [&](std::size_t y) {
         for (int x = 0; x < size.w; ++x) {
             const int first = horizontal.offsets[static_cast<std::size_t>(x)];
             const int last  = horizontal.offsets[static_cast<std::size_t>(x + 1)];
@@ -157,42 +210,37 @@ media::decode::Image resize_bicubic(const media::decode::Image& input, Size size
                 float value = 0.0f;
                 for (int i = first; i < last; ++i) {
                     const int source =
-                        std::clamp(horizontal.starts[static_cast<std::size_t>(x)] + (i - first), 0,
-                                   input.width - 1);
+                        horizontal.starts[static_cast<std::size_t>(x)] + (i - first);
                     value +=
                         horizontal.weights[static_cast<std::size_t>(i)] *
-                        input.rgb[(static_cast<std::size_t>(y) * input.width + source) * 3 + c];
+                        input.rgb[(y * static_cast<std::size_t>(input.width) + source) * 3 + c];
                 }
-                temp[(static_cast<std::size_t>(y) * size.w + x) * 3 + c] =
+                temp[(y * static_cast<std::size_t>(size.w) + x) * 3 + c] =
                     static_cast<std::uint8_t>(std::clamp(round_even(value), 0, 255));
             }
         }
-    }
-
-    media::decode::Image out;
-    out.width  = size.w;
-    out.height = size.h;
-    out.rgb.resize(static_cast<std::size_t>(size.h) * size.w * 3);
-    for (int y = 0; y < size.h; ++y) {
-        const int first = vertical.offsets[static_cast<std::size_t>(y)];
-        const int last  = vertical.offsets[static_cast<std::size_t>(y + 1)];
+    };
+    auto second_pass = [&](std::size_t y) {
+        const int first = vertical.offsets[y];
+        const int last  = vertical.offsets[y + 1];
         for (int x = 0; x < size.w; ++x) {
             for (int c = 0; c < 3; ++c) {
                 float value = 0.0f;
                 for (int i = first; i < last; ++i) {
                     const int source =
-                        std::clamp(vertical.starts[static_cast<std::size_t>(y)] + (i - first), 0,
-                                   input.height - 1);
+                        vertical.starts[y] + (i - first);
                     value += vertical.weights[static_cast<std::size_t>(i)] *
                              temp[(static_cast<std::size_t>(source) * size.w + x) * 3 + c];
                 }
-                out.rgb[(static_cast<std::size_t>(y) * size.w + x) * 3 + c] =
+                out.rgb[(y * static_cast<std::size_t>(size.w) + x) * 3 + c] =
                     static_cast<std::uint8_t>(std::clamp(round_even(value), 0, 255));
             }
         }
-    }
-    return out;
+    };
+    parallel_for_rows(static_cast<std::size_t>(input.height), 8, first_pass, workers);
+    parallel_for_rows(static_cast<std::size_t>(size.h), 8, second_pass, workers);
 }
+} // namespace
 
 float normalized(const media::decode::Image& image, int y, int x, int channel) {
     return static_cast<float>(
@@ -201,19 +249,26 @@ float normalized(const media::decode::Image& image, int y, int x, int channel) {
            1.0f;
 }
 
-void append_patch(const std::vector<const media::decode::Image*>& frames, int grid_y, int grid_x,
-                  std::vector<float>& out) {
+void append_patch_at(const std::vector<const media::decode::Image*>& frames, int grid_y, int grid_x,
+                     float* out) {
+    float* cursor = out;
     for (int channel = 0; channel < 3; ++channel) {
         for (int temporal = 0; temporal < kTemporal; ++temporal) {
             const media::decode::Image& frame = *frames[static_cast<std::size_t>(temporal)];
             for (int y = 0; y < kPatch; ++y) {
                 for (int x = 0; x < kPatch; ++x) {
-                    out.push_back(
-                        normalized(frame, grid_y * kPatch + y, grid_x * kPatch + x, channel));
+                    *cursor++ =
+                        normalized(frame, grid_y * kPatch + y, grid_x * kPatch + x, channel);
                 }
             }
         }
     }
+}
+
+void append_patch(const std::vector<const media::decode::Image*>& frames, int grid_y, int grid_x,
+                  std::vector<float>& out) {
+    out.resize(out.size() + static_cast<std::size_t>(kTemporal) * kPatch * kPatch * 3);
+    append_patch_at(frames, grid_y, grid_x, out.data() + out.size() - kPatchFeatures);
 }
 
 void add_budget(PreprocessStats& stats, const VisionItem& item);
@@ -221,7 +276,11 @@ void enforce_budget(const PreprocessStats& stats, const ProcessorOptions& option
 
 Prepared prepare_image(const ChatPart& part, const ProcessorOptions& options,
                        const media::decode::Policy& policy, PreprocessStats& stats) {
-    media::decode::Image image = media::decode::decode_image(part.media.bytes, policy);
+    media::decode::Image image;
+    {
+        StageTimer timer("image:decode");
+        image = media::decode::decode_image(part.media.bytes, policy);
+    }
     const Size size = smart_resize_image(image.height, image.width, options.image_min_pixels,
                                          options.image_max_pixels);
     const int gh    = size.h / kPatch;
@@ -231,18 +290,32 @@ Prepared prepare_image(const ChatPart& part, const ProcessorOptions& options,
     out.item.grid     = {1, gh, gw};
     add_budget(stats, out.item);
     enforce_budget(stats, options);
-    image = resize_bicubic(image, size);
-    out.patches.reserve(static_cast<std::size_t>(gh) * gw * kPatchFeatures);
+    {
+        StageTimer timer("image:resize_bicubic");
+        image = resize_bicubic(image, size);
+    }
     const std::vector<const media::decode::Image*> frames{&image, &image};
-    for (int block_y = 0; block_y < gh / kMerge; ++block_y) {
-        for (int block_x = 0; block_x < gw / kMerge; ++block_x) {
-            for (int merge_y = 0; merge_y < kMerge; ++merge_y) {
-                for (int merge_x = 0; merge_x < kMerge; ++merge_x) {
-                    append_patch(frames, block_y * kMerge + merge_y, block_x * kMerge + merge_x,
-                                 out.patches);
-                }
+    // Patch rows land in merger-friendly order; each (block_y, block_x) tile
+    // owns a contiguous span, so tiles fill independently across cores.
+    const int gw_blocks = gw / kMerge;
+    const std::size_t tiles =
+        static_cast<std::size_t>(gh / kMerge) * static_cast<std::size_t>(gw_blocks);
+    {
+        StageTimer timer("image:patch_fill");
+        out.patches.assign(static_cast<std::size_t>(gh) * gw * kPatchFeatures, 0.0f);
+        parallel_for_rows(tiles, 4, [&](std::size_t tile) {
+        const int block_y = static_cast<int>(tile / static_cast<std::size_t>(gw_blocks));
+        const int block_x = static_cast<int>(tile % static_cast<std::size_t>(gw_blocks));
+        float* base = out.patches.data() +
+                      tile * static_cast<std::size_t>(kMerge * kMerge * kPatchFeatures);
+        for (int merge_y = 0; merge_y < kMerge; ++merge_y) {
+            for (int merge_x = 0; merge_x < kMerge; ++merge_x) {
+                append_patch_at(frames, block_y * kMerge + merge_y, block_x * kMerge + merge_x,
+                                base + static_cast<std::size_t>(merge_y * kMerge + merge_x) *
+                                           kPatchFeatures);
             }
         }
+        });
     }
     return out;
 }
@@ -264,7 +337,14 @@ Prepared prepare_video(const ChatPart& part, const ProcessorOptions& options,
     out.item.grid     = {gt, gh, gw};
     add_budget(stats, out.item);
     enforce_budget(stats, options);
-    for (media::decode::Image& frame : video.frames) { frame = resize_bicubic(frame, size); }
+    // Frames are independent, so resize them in parallel across cores; the
+    // per-frame resize itself stays serial to avoid nested thread fan-out.
+    parallel_for_rows(
+        video.frames.size(), 1,
+        [&](std::size_t i) {
+            video.frames[i] = resize_bicubic_serial(video.frames[i], size);
+        },
+        std::max(1u, std::thread::hardware_concurrency()));
     if (pad_temporal) { video.frames.push_back(video.frames.back()); }
     out.item.timestamps.reserve(static_cast<std::size_t>(gt));
     std::vector<int> timestamp_indices = video.indices;
@@ -276,22 +356,34 @@ Prepared prepare_video(const ChatPart& part, const ProcessorOptions& options,
             static_cast<double>(timestamp_indices[2 * t] + timestamp_indices[2 * t + 1]) /
             (2.0 * video.fps));
     }
-    out.patches.reserve(static_cast<std::size_t>(gt) * gh * gw * kPatchFeatures);
-    for (int t = 0; t < gt; ++t) {
+    // Patch order is t-major, then block_y, block_x, merge_y, merge_x. Each
+    // (t, block_y, block_x) tile owns a contiguous span and fills independently.
+    const int gw_blocks = gw / kMerge;
+    const int gh_blocks = gh / kMerge;
+    const std::size_t tiles = static_cast<std::size_t>(gt) *
+                              static_cast<std::size_t>(gh_blocks) *
+                              static_cast<std::size_t>(gw_blocks);
+    out.patches.assign(static_cast<std::size_t>(gt) * gh * gw * kPatchFeatures, 0.0f);
+    parallel_for_rows(tiles, 4, [&](std::size_t tile) {
+        const std::size_t per_frame =
+            static_cast<std::size_t>(gh_blocks) * static_cast<std::size_t>(gw_blocks);
+        const int t       = static_cast<int>(tile / per_frame);
+        const std::size_t rem = tile % per_frame;
+        const int block_y = static_cast<int>(rem / static_cast<std::size_t>(gw_blocks));
+        const int block_x = static_cast<int>(rem % static_cast<std::size_t>(gw_blocks));
         const std::vector<const media::decode::Image*> frames{
             &video.frames[static_cast<std::size_t>(2 * t)],
             &video.frames[static_cast<std::size_t>(2 * t + 1)]};
-        for (int block_y = 0; block_y < gh / kMerge; ++block_y) {
-            for (int block_x = 0; block_x < gw / kMerge; ++block_x) {
-                for (int merge_y = 0; merge_y < kMerge; ++merge_y) {
-                    for (int merge_x = 0; merge_x < kMerge; ++merge_x) {
-                        append_patch(frames, block_y * kMerge + merge_y, block_x * kMerge + merge_x,
-                                     out.patches);
-                    }
-                }
+        float* base = out.patches.data() +
+                      tile * static_cast<std::size_t>(kMerge * kMerge * kPatchFeatures);
+        for (int merge_y = 0; merge_y < kMerge; ++merge_y) {
+            for (int merge_x = 0; merge_x < kMerge; ++merge_x) {
+                append_patch_at(frames, block_y * kMerge + merge_y, block_x * kMerge + merge_x,
+                                base + static_cast<std::size_t>(merge_y * kMerge + merge_x) *
+                                           kPatchFeatures);
             }
         }
-    }
+    }, std::max(1u, std::thread::hardware_concurrency()));
     return out;
 }
 
@@ -557,12 +649,17 @@ Processor::Processor(const Tokenizer& tokenizer, const CompiledChatTemplate& cha
 
 ProcessedInput Processor::process(const std::vector<ChatMessage>& messages,
                                   ChatRenderOptions render_options) const {
+    StageTimer timer_process("== process total");
     const std::vector<const ChatPart*> parts = media_parts(messages);
     if (parts.size() > options_.max_media_items) {
         throw ProcessorError(ProcessorErrorKind::BudgetExceeded,
                              "media item count exceeds processor budget");
     }
-    RenderedChat rendered = chat_template_.render(messages, std::move(render_options));
+    RenderedChat rendered;
+    {
+        StageTimer timer("render template");
+        rendered = chat_template_.render(messages, std::move(render_options));
+    }
     const media::decode::Policy policy{
         .max_bytes                  = options_.max_media_bytes,
         .max_decoded_pixels         = options_.max_decoded_pixels,
@@ -587,7 +684,10 @@ ProcessedInput Processor::process(const std::vector<ChatMessage>& messages,
             }
             throw;
         }
-        media.item.content_digest = sha256(part->media.bytes);
+        {
+            StageTimer timer("sha256 media");
+            media.item.content_digest = sha256(part->media.bytes);
+        }
         if (media.patches.size() % kPatchFeatures != 0) {
             throw std::logic_error("preprocessed patch buffer is not row aligned");
         }
@@ -601,8 +701,15 @@ ProcessedInput Processor::process(const std::vector<ChatMessage>& messages,
         throw std::logic_error("preprocessed patch count does not match processor budget");
     }
 
-    rendered                     = expand_placeholders(std::move(rendered), items);
-    EncodedChat encoded          = encode_rendered_chat(tokenizer_, rendered);
+    {
+        StageTimer timer("expand placeholders");
+        rendered = expand_placeholders(std::move(rendered), items);
+    }
+    EncodedChat encoded;
+    {
+        StageTimer timer("tokenize rendered");
+        encoded = encode_rendered_chat(tokenizer_, rendered);
+    }
     output.input_ids             = std::move(encoded.input_ids);
     output.turn_rewrite_boundary = encoded.turn_rewrite_boundary;
     output.token_types.resize(output.input_ids.size(), 0);
@@ -619,7 +726,10 @@ ProcessedInput Processor::process(const std::vector<ChatMessage>& messages,
     output.vision_items = std::move(items);
     stats.patch_bytes   = output.patches.size() * sizeof(float);
     output.stats        = stats;
-    assign_positions(output);
+    {
+        StageTimer timer("assign positions");
+        assign_positions(output);
+    }
     return output;
 }
 
