@@ -38,13 +38,17 @@ docker run --rm --gpus all nvidia/cuda:13.1.2-runtime-ubuntu24.04 nvidia-smi
 
 ### GHCR 拉取权限
 
-`ghcr.io/yorkane/ninfer-4090` 是 **public** 包，通常无需登录即可 `docker pull`。遇到限流时可用 GitHub PAT 登录（public 包匿名读一般不需要，但登录更稳）：
+`ghcr.io/yorkane/ninfer-4090` 托管在 GHCR。若 `docker pull` 报 **`unauthorized` / `denied`**，先登录再拉：
 
 ```bash
 docker login ghcr.io
 # Username: <你的 GitHub 用户名>
-# Password: <GitHub PAT>
+# Password: <GitHub PAT（需 read:packages 权限）>
 ```
+
+> 登录成功后凭证写入 `~/.docker/config.json`。CI 环境可用
+> `echo "$GHCR_TOKEN" | docker login ghcr.io -u <用户名> --password-stdin`。
+> 该包若为 public，匿名 `docker pull` 即可，无需登录。
 
 ## 2. 获取并校验模型
 
@@ -289,7 +293,7 @@ docker logs --tail 200 ninfer
 
 **请求报 model 不匹配？** 请求体 `model` 字段必须等于 `NINFER_MODEL_ID`（默认 `qwen3.6-35b-a3b`）。
 
-**拉镜像 403 / 限流？** public 包一般匿名可拉；遇到限流按第 1 节 `docker login ghcr.io`。
+**拉镜像 403 / unauthorized / 限流？** 先按第 1 节 `docker login ghcr.io` 登录（package 为 private 时，需登录且账号有读权限才能拉）；匿名限流同样返回 403，登录后可提高额度。
 
 ## 10. 构建自己的镜像（可选）
 
