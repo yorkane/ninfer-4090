@@ -8,7 +8,7 @@ The engine loads the official groupwise `.ninfer` artifact, serves OpenAI- and A
 
 ## Docker Quick Start
 
-A ready-to-run image is published at `ghcr.io/yorkane/ninfer-4090:latest` (currently a **private** package; `docker login ghcr.io` first). The model artifact (~21 GiB) is not baked into the image, so mount the directory holding your `.ninfer` file at `/models` and start:
+A ready-to-run image is published at `ghcr.io/yorkane/ninfer-4090:latest` (**public** - plain `docker pull`, no login required; `docker login ghcr.io` is only needed to push new images). The model artifact (~21 GiB) is not baked into the image, so mount the directory holding your `.ninfer` file at `/models` and start:
 
 ```bash
 docker run -d --name ninfer \
