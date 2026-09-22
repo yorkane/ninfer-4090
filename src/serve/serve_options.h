@@ -42,6 +42,12 @@ struct ServeOptions {
     SpeculativeOptions speculative;
     bool enable_vision                     = false;
     std::uint32_t vision_max_tokens        = 8192;
+    // Upper bound on image/video content parts in one request (default 16).
+    std::size_t max_media_items            = 16;
+    // Aggregate decoded-pixel budget for sampled video frames (default 128 MP).
+    std::uint64_t max_decoded_video_pixels = 128ULL * 1024ULL * 1024ULL;
+    // Sampled-video resize target volume in pixels (0 => artifact video config).
+    std::uint64_t video_max_pixels         = 0;
     bool use_cuda_graph                    = true;
     bool allow_prefix_reuse = true;
     bool enable_prompt_cache               = false;

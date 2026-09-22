@@ -84,6 +84,15 @@ struct EngineOptions {
     SpeculativeOptions speculative;
     bool enable_vision                 = false;
     std::uint32_t vision_max_tokens    = 8192;
+    // Upper bound on image/video content parts in one request. The vision
+    // processor budget and the serve-layer ingress gate both read this.
+    std::size_t max_media_items        = 16;
+    // Aggregate decoded pixel budget for sampled video frames. Long videos are
+    // sampled at 2 fps, so duration and source resolution both scale this.
+    std::uint64_t max_decoded_video_pixels = 128ULL * 1024ULL * 1024ULL;
+    // Sampled-video resize target volume (pixels across all retained frames).
+    // 0 follows the artifact's video_preprocessor_config.json longest_edge.
+    std::uint64_t video_max_pixels         = 0;
     bool use_cuda_graph = true;
     bool enable_prompt_cache               = false;
     std::filesystem::path prompt_cache_dir = "";          // empty resolves to default user cache dir

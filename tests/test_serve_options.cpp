@@ -64,6 +64,70 @@ int main() {
     failures += check(wddm_opt_in.wddm_evictable_budget,
                       "--wddm-evictable-budget was not parsed correctly");
 
+    // Media ingress ceilings default to the historical hardcoded values so that
+    // omitting the new flags leaves the engine byte-for-byte unchanged.
+    failures += check(defaults.max_media_items == 16, "max media items default mismatch");
+    failures += check(defaults.max_decoded_video_pixels == (128ULL * 1024ULL * 1024ULL),
+                      "max decoded video pixels default mismatch");
+    failures += check(defaults.video_max_pixels == 0,
+                      "video resize budget should default to the artifact config");
+
+    // Each media ceiling implies Vision, mirroring --vision-max-tokens.
+    const ServeOptions media_items_opt =
+        parse({"ninfer-serve", "model.ninfer", "--max-media-items", "64"});
+    failures += check(media_items_opt.max_media_items == 64,
+                      "--max-media-items did not reach serving options");
+    failures += check(media_items_opt.enable_vision,
+                      "--max-media-items did not enable Vision");
+
+    const ServeOptions video_pixels_opt =
+        parse({"ninfer-serve", "model.ninfer", "--max-video-pixels", "536870912"});
+    failures += check(video_pixels_opt.max_decoded_video_pixels == 536870912ULL,
+                      "--max-video-pixels did not reach serving options");
+    failures += check(video_pixels_opt.enable_vision,
+                      "--max-video-pixels did not enable Vision");
+
+    const ServeOptions video_resize_opt =
+        parse({"ninfer-serve", "model.ninfer", "--video-max-pixels", "67108864"});
+    failures += check(video_resize_opt.video_max_pixels == 67108864ULL,
+                      "--video-max-pixels did not reach serving options");
+    failures += check(video_resize_opt.enable_vision,
+                      "--video-max-pixels did not enable Vision");
+
+    bool zero_media_items_rejected = false;
+    try {
+        (void)parse({"ninfer-serve", "model.ninfer", "--max-media-items", "0"});
+    } catch (const std::invalid_argument&) { zero_media_items_rejected = true; }
+    failures += check(zero_media_items_rejected, "--max-media-items 0 was accepted");
+
+    bool zero_video_pixels_rejected = false;
+    try {
+        (void)parse({"ninfer-serve", "model.ninfer", "--max-video-pixels", "0"});
+    } catch (const std::invalid_argument&) { zero_video_pixels_rejected = true; }
+    failures += check(zero_video_pixels_rejected, "--max-video-pixels 0 was accepted");
+
+    bool zero_video_resize_rejected = false;
+    try {
+        (void)parse({"ninfer-serve", "model.ninfer", "--video-max-pixels", "0"});
+    } catch (const std::invalid_argument&) { zero_video_resize_rejected = true; }
+    failures += check(zero_video_resize_rejected, "--video-max-pixels 0 was accepted");
+
+    bool negative_media_items_rejected = false;
+    try {
+        (void)parse({"ninfer-serve", "model.ninfer", "--max-media-items", "-1"});
+    } catch (const std::invalid_argument&) { negative_media_items_rejected = true; }
+    failures += check(negative_media_items_rejected, "negative --max-media-items was accepted");
+
+    failures +=
+        check(serve_usage_text("ninfer-serve").find("--max-media-items") != std::string::npos,
+              "serve help omits --max-media-items");
+    failures +=
+        check(serve_usage_text("ninfer-serve").find("--max-video-pixels") != std::string::npos,
+              "serve help omits --max-video-pixels");
+    failures +=
+        check(serve_usage_text("ninfer-serve").find("--video-max-pixels") != std::string::npos,
+              "serve help omits --video-max-pixels");
+
     const ServeOptions ui_disabled =
         parse({"ninfer-serve", "model.ninfer", "--no-ui"});
     failures += check(!ui_disabled.enable_ui, "--no-ui did not disable WebUI");

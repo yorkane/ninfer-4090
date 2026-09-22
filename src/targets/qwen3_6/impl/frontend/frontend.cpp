@@ -613,7 +613,8 @@ DecoderState terminal_state(DecoderState state) {
 class Frontend::Impl {
 public:
     Impl(const FrontendResources& resources, bool registered_checkpoint, bool vision_enabled_,
-         std::uint32_t vision_max_tokens_)
+         std::uint32_t vision_max_tokens_, std::size_t max_media_items_,
+         std::uint64_t max_decoded_video_pixels_, std::uint64_t video_max_pixels_)
         : chat_template(compile_chat_template(resources)),
           tokenizer(std::make_shared<const fi::Tokenizer>(
               fi::TokenizerResources{.tokenizer_json         = resources.tokenizer_json,
@@ -634,6 +635,15 @@ public:
             const std::uint64_t max_spatial = processor.max_raw_patches;
             processor.max_attention_pairs = std::max(processor.max_attention_pairs, max_spatial * max_spatial);
         }
+        // Media ingress ceilings are operator-tunable so long videos and wide
+        // frame batches fit in one request when VRAM allows.
+        if (max_media_items_ > 0) { processor.max_media_items = max_media_items_; }
+        if (max_decoded_video_pixels_ > 0) {
+            processor.max_decoded_video_pixels = max_decoded_video_pixels_;
+        }
+        // Note: video_max_pixels applies after the vision_max_tokens clamp above,
+        // so an explicit raise can widen the sampled-frame volume beyond it.
+        if (video_max_pixels_ > 0) { processor.video_max_pixels = video_max_pixels_; }
         if (registered_checkpoint) { validate_registered_tokenizer(*tokenizer); }
         for (const int token : tokenizer->default_stop_token_ids()) {
             if (!tokenizer->is_valid_token(token)) {
@@ -908,16 +918,20 @@ Frontend& Frontend::operator=(Frontend&&) noexcept = default;
 Frontend::~Frontend()                              = default;
 
 Frontend make_frontend(const FrontendResources& resources, bool vision_enabled,
-                       std::uint32_t vision_max_tokens) {
-    return Frontend(
-        std::make_shared<const Frontend::Impl>(resources, true, vision_enabled, vision_max_tokens));
+                       std::uint32_t vision_max_tokens, std::size_t max_media_items,
+                       std::uint64_t max_decoded_video_pixels, std::uint64_t video_max_pixels) {
+    return Frontend(std::make_shared<const Frontend::Impl>(resources, true, vision_enabled,
+                                                           vision_max_tokens, max_media_items,
+                                                           max_decoded_video_pixels,
+                                                           video_max_pixels));
 }
 
 Frontend FrontendTestAccess::create_component(const FrontendResources& resources,
                                               bool vision_enabled,
                                               std::uint32_t vision_max_tokens) {
     return Frontend(std::make_shared<const Frontend::Impl>(resources, false, vision_enabled,
-                                                           vision_max_tokens));
+                                                           vision_max_tokens, 16,
+                                                           128ULL * 1024ULL * 1024ULL, 0));
 }
 
 const PreparedPromptData& PreparedPromptAccess::view(const PreparedPrompt& prompt) {

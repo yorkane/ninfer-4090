@@ -66,7 +66,8 @@ struct RequestLifetime {
 struct MediaInputCapacity {
     std::mutex mutex;
     std::condition_variable cv;
-    bool occupied = false;
+    std::size_t capacity = 1;
+    std::size_t in_use   = 0;
 };
 
 struct MediaInputPermit {
@@ -76,9 +77,9 @@ struct MediaInputPermit {
     ~MediaInputPermit() {
         {
             std::lock_guard lock(capacity->mutex);
-            capacity->occupied = false;
+            if (capacity->in_use > 0) { --capacity->in_use; }
         }
-        capacity->cv.notify_one();
+        capacity->cv.notify_all();
     }
 
     std::shared_ptr<MediaInputCapacity> capacity;
@@ -87,7 +88,6 @@ struct MediaInputPermit {
 namespace {
 
 using Clock                              = std::chrono::steady_clock;
-constexpr std::size_t kMaximumMediaItems = 16;
 
 [[noreturn]] void throw_preparation_cancelled();
 
@@ -285,6 +285,9 @@ GenerationService::GenerationService(ServeOptions options, LoadProgress load_pro
     engine_options.kv_cache             = options_.kv_cache;
     engine_options.enable_vision        = options_.enable_vision;
     engine_options.vision_max_tokens    = options_.vision_max_tokens;
+    engine_options.max_media_items      = options_.max_media_items;
+    engine_options.max_decoded_video_pixels = options_.max_decoded_video_pixels;
+    engine_options.video_max_pixels     = options_.video_max_pixels;
     engine_options.use_cuda_graph       = options_.use_cuda_graph;
     engine_options.enable_prompt_cache  = options_.enable_prompt_cache;
     engine_options.prompt_cache_dir     = options_.prompt_cache_dir;
@@ -297,6 +300,8 @@ GenerationService::GenerationService(ServeOptions options, LoadProgress load_pro
     request_capacity_    = std::make_shared<RequestCapacity>(
         static_cast<std::size_t>(options_.max_concurrency) + options_.max_pending_requests);
     media_input_capacity_ = std::make_shared<MediaInputCapacity>();
+    media_input_capacity_->capacity =
+        std::max<std::size_t>(1, static_cast<std::size_t>(options_.max_concurrency));
 }
 
 std::shared_ptr<RequestLifetime> GenerationService::acquire_request_lifetime() const {
@@ -324,7 +329,7 @@ HostInputLease
 GenerationService::acquire_media_input(Clock::time_point deadline,
                                        const std::function<bool()>& is_cancelled) const {
     std::unique_lock lock(media_input_capacity_->mutex);
-    while (media_input_capacity_->occupied) {
+    while (media_input_capacity_->in_use >= media_input_capacity_->capacity) {
         if (is_cancelled && is_cancelled()) { throw_preparation_cancelled(); }
         const Clock::time_point now = Clock::now();
         if (now >= deadline) {
@@ -342,7 +347,7 @@ GenerationService::acquire_media_input(Clock::time_point deadline,
                                  "inference request expired while waiting for media preparation"));
     }
 
-    media_input_capacity_->occupied = true;
+    ++media_input_capacity_->in_use;
     lock.unlock();
     try {
         auto permit = std::make_shared<MediaInputPermit>(media_input_capacity_);
@@ -350,9 +355,9 @@ GenerationService::acquire_media_input(Clock::time_point deadline,
     } catch (...) {
         {
             std::lock_guard capacity_lock(media_input_capacity_->mutex);
-            media_input_capacity_->occupied = false;
+            if (media_input_capacity_->in_use > 0) { --media_input_capacity_->in_use; }
         }
-        media_input_capacity_->cv.notify_one();
+        media_input_capacity_->cv.notify_all();
         throw;
     }
 }
@@ -377,9 +382,9 @@ PreparedRequest GenerationService::prepare(const GenerationRequest& request,
         const std::invalid_argument error("Vision is disabled for this server");
         throw_invalid_input(error, "vision_disabled");
     }
-    if (media_items > kMaximumMediaItems) {
+    if (media_items > options_.max_media_items) {
         throw_request_error(ninfer::RequestError(RequestErrorKind::MediaBudgetExceeded,
-                                                 "request exceeds the 16-item media limit"));
+                                                 "request exceeds the configured media item limit"));
     }
     prepared.lifetime = acquire_request_lifetime();
     HostInputLease host_input;
@@ -417,9 +422,9 @@ int GenerationService::count_prompt_tokens(const GenerationRequest& request,
         const std::invalid_argument error("Vision is disabled for this server");
         throw_invalid_input(error, "vision_disabled");
     }
-    if (media_items > kMaximumMediaItems) {
+    if (media_items > options_.max_media_items) {
         throw_request_error(ninfer::RequestError(RequestErrorKind::MediaBudgetExceeded,
-                                                 "request exceeds the 16-item media limit"));
+                                                 "request exceeds the configured media item limit"));
     }
     const Clock::time_point deadline =
         Clock::now() + std::chrono::milliseconds(options_.pending_timeout_ms);

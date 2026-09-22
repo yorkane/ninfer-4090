@@ -113,7 +113,10 @@ Package::Frontend Package::make_frontend(const LoadedModel& model) {
     if (model.impl_ == nullptr) { throw std::invalid_argument("loaded model is empty"); }
     return qwen3_6::make_frontend(model.impl_->data.frontend,
                                   model.impl_->data.runtime.features.vision,
-                                  model.impl_->data.runtime.features.vision_max_tokens);
+                                  model.impl_->data.runtime.features.vision_max_tokens,
+                                  model.impl_->data.runtime.features.max_media_items,
+                                  model.impl_->data.runtime.features.max_decoded_video_pixels,
+                                  model.impl_->data.runtime.features.video_max_pixels);
 }
 
 Package::SequencePlanner Package::make_sequence_planner(DeviceContext& device,

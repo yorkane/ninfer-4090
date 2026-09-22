@@ -123,7 +123,15 @@ std::string serve_usage_text(const char* argv0) {
            "                              generated text is unchanged (requires --spec)\n\n"
            "Vision & Multimodal:\n"
            "  --vision                    Enable image/video vision encoder and load Vision GPU allocations\n"
-           "  --vision-max-tokens <N>     Vision scratchpad token capacity (default: 8192)\n\n"
+           "  --vision-max-tokens <N>     Vision scratchpad token capacity (default: 8192; bounds "
+           "per-request vision tokens and hence frame count)\n"
+           "  --max-media-items <N>       Maximum image/video content parts per request (default: 16)\n"
+           "  --max-video-pixels <N>      Aggregate decoded-pixel budget for sampled video frames "
+           "(default: 134217728 = 128 MP)\n"
+           "  --video-max-pixels <N>      Sampled-video resize target volume in pixels across all "
+           "retained frames; raising it trades frames for per-frame detail. Omit to follow the "
+           "artifact video_preprocessor_config.json longest_edge (explicit 0 is rejected). "
+           "Raising it does not enlarge the vision scratchpad; raise --vision-max-tokens too.\n\n"
            "Reasoning & Generation Defaults:\n"
            "  --default-max-tokens <N>    Default maximum output tokens when omitted in client request (default: " + default_max_toks + ")\n"
            "  --no-thinking               Disable reasoning/thinking mode globally by default\n"
@@ -248,6 +256,26 @@ ServeOptions parse_serve_options(int argc, char** argv) {
             }
             options.vision_max_tokens = static_cast<std::uint32_t>(val);
             options.enable_vision     = true;
+        } else if (arg == "--max-media-items") {
+            const std::uint64_t items =
+                parse_u64(require_value("--max-media-items"), "max-media-items");
+            if (items == 0) {
+                throw std::invalid_argument("--max-media-items is out of range");
+            }
+            options.max_media_items = static_cast<std::size_t>(items);
+            options.enable_vision   = true;
+        } else if (arg == "--max-video-pixels") {
+            const std::uint64_t pixels =
+                parse_u64(require_value("--max-video-pixels"), "max-video-pixels");
+            if (pixels == 0) { throw std::invalid_argument("--max-video-pixels must be positive"); }
+            options.max_decoded_video_pixels = pixels;
+            options.enable_vision            = true;
+        } else if (arg == "--video-max-pixels") {
+            const std::uint64_t pixels =
+                parse_u64(require_value("--video-max-pixels"), "video-max-pixels");
+            if (pixels == 0) { throw std::invalid_argument("--video-max-pixels must be positive"); }
+            options.video_max_pixels = pixels;
+            options.enable_vision    = true;
         } else if (arg == "--no-cuda-graph") {
             options.use_cuda_graph = false;
         } else if (arg == "--no-prefix-reuse") {
