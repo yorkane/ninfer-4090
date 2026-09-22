@@ -3,9 +3,19 @@
 FROM nvidia/cuda:13.1.2-devel-ubuntu24.04 AS build
 
 ARG DEBIAN_FRONTEND=noninteractive
+# CMake >= 3.30 is required (CMP0169 in CMakeLists.txt); the distro cmake on noble is 3.28.
+RUN apt-get update \
+    && apt-get install --yes --no-install-recommends ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && curl -fsSL -o /tmp/cmake.tar.gz \
+        https://github.com/Kitware/CMake/releases/download/v3.30.5/cmake-3.30.5-linux-x86_64.tar.gz \
+    && mkdir -p /opt/cmake \
+    && tar --strip-components=1 -C /opt/cmake -xzf /tmp/cmake.tar.gz \
+    && rm -f /tmp/cmake.tar.gz
+
 RUN apt-get update \
     && apt-get install --yes --no-install-recommends \
-        cmake \
+        git \
         libavcodec-dev \
         libavformat-dev \
         libavutil-dev \
@@ -18,8 +28,10 @@ RUN apt-get update \
 WORKDIR /src
 COPY . .
 
-RUN cmake -S . -B /build -G Ninja \
+RUN export PATH=/opt/cmake/bin:$PATH \
+    && cmake -S . -B /build -G Ninja \
         -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_CUDA_ARCHITECTURES=89 \
         -DNINFER_BUILD_APPS=ON \
         -DBUILD_TESTING=OFF \
         -DNINFER_BUILD_BENCHMARKS=OFF \
@@ -40,9 +52,17 @@ RUN apt-get update \
 
 COPY --from=build /build/apps/ninfer /usr/local/bin/ninfer
 COPY --from=build /build/apps/ninfer-serve /usr/local/bin/ninfer-serve
+COPY entrypoint.sh /usr/local/bin/ninfer-entrypoint
+RUN chmod +x /usr/local/bin/ninfer /usr/local/bin/ninfer-serve /usr/local/bin/ninfer-entrypoint
 
 WORKDIR /workspace
-EXPOSE 8080
+
+# The model artifact is mounted, never baked in (it is ~21 GiB).
+VOLUME ["/models"]
+
+EXPOSE 8000
 STOPSIGNAL SIGTERM
 
-CMD ["ninfer-serve", "--help"]
+# Bring up the tuned serving profile against the mounted artifact.
+# Override any of it with NINFER_* env vars, or append raw ninfer-serve flags.
+ENTRYPOINT ["/usr/local/bin/ninfer-entrypoint"]
