@@ -6,6 +6,22 @@ The engine loads the official groupwise `.ninfer` artifact, serves OpenAI- and A
 
 ---
 
+## Docker Quick Start
+
+A ready-to-run image is published at `ghcr.io/yorkane/ninfer-4090:latest` (currently a **private** package; `docker login ghcr.io` first). The model artifact (~21 GiB) is not baked into the image, so mount the directory holding your `.ninfer` file at `/models` and start:
+
+```bash
+docker run -d --name ninfer \
+  --gpus "device=0" \
+  -v /opt/models:/models:ro \
+  -p 8000:8000 \
+  ghcr.io/yorkane/ninfer-4090:latest
+```
+
+The entrypoint enables vision, MTP speculative decoding, and automatic KV capacity sizing; every knob is overridable via environment variables (e.g. `NINFER_MAX_CONTEXT`, `NINFER_KV_DTYPE`, `NINFER_CONC`). See `deploy.md` for model download, verification, and tuning details.
+
+---
+
 ### Standard Product Benchmark Matrix (`ninfer_bench`)
 
 Evaluated on official Qwen3.8-27B (16.96 GiB groupwise `.ninfer` artifact, CUDA 13.3, single 24 GB RTX 4090):

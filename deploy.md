@@ -36,20 +36,6 @@ sudo systemctl restart docker
 docker run --rm --gpus all nvidia/cuda:13.1.2-runtime-ubuntu24.04 nvidia-smi
 ```
 
-### GHCR 拉取权限
-
-`ghcr.io/yorkane/ninfer-4090` 托管在 GHCR。若 `docker pull` 报 **`unauthorized` / `denied`**，先登录再拉：
-
-```bash
-docker login ghcr.io
-# Username: <你的 GitHub 用户名>
-# Password: <GitHub PAT（需 read:packages 权限）>
-```
-
-> 登录成功后凭证写入 `~/.docker/config.json`。CI 环境可用
-> `echo "$GHCR_TOKEN" | docker login ghcr.io -u <用户名> --password-stdin`。
-> 该包若为 public，匿名 `docker pull` 即可，无需登录。
-
 ## 2. 获取并校验模型
 
 官方 HF 仓库：`https://huggingface.co/neroued/Qwen3.6-35B-A3B-NInfer`，文件名 `qwen3_6_35b_a3b.ninfer`。
@@ -104,6 +90,16 @@ stat -c%s /opt/models/qwen3_6_35b_a3b.ninfer
 ## 3. 一步到位的最小可运行命令
 
 假设模型在宿主机 `/opt/models/qwen3_6_35b_a3b.ninfer`（换成你的实际路径）：
+
+> **注意：该 GHCR 包目前是 private 的**（匿名 `docker pull` 会返回 403）。先登录对该包有读权限的 GitHub 账号再拉：
+
+```bash
+docker login ghcr.io
+# Username: 你的 GitHub 用户名
+# Password: 有 read:packages 权限的 PAT
+```
+
+CI 环境可用 `echo "$GHCR_TOKEN" | docker login ghcr.io -u <用户名> --password-stdin`。若日后该包改为 public，匿名 `docker pull` 即可。
 
 ```bash
 docker run -d --name ninfer \
@@ -293,7 +289,7 @@ docker logs --tail 200 ninfer
 
 **请求报 model 不匹配？** 请求体 `model` 字段必须等于 `NINFER_MODEL_ID`（默认 `qwen3.6-35b-a3b`）。
 
-**拉镜像 403 / unauthorized / 限流？** 先按第 1 节 `docker login ghcr.io` 登录（package 为 private 时，需登录且账号有读权限才能拉）；匿名限流同样返回 403，登录后可提高额度。
+**拉镜像 403 / unauthorized / 限流？** 该包目前是 **private** 的：`docker login ghcr.io` 登录的账号必须对该包有读权限（包 owner 或已被授权的用户）才能拉，匿名请求一律 403；有权限账号同样可能遇到限流，登录后重试即可。
 
 ## 10. 构建自己的镜像（可选）
 

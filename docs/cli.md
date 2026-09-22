@@ -137,7 +137,7 @@ measured recommendation rather than a semantic limit.
 | `--prefill-chunk N` | positive text-prefill chunk, in multiples of 128 | `1024` |
 | `--max-new N` | requested output-token limit | `128` |
 | `--device N` | CUDA device index | `0` |
-| `--kv-dtype bf16\|int8\|rk8v4` | KV-cache storage; `rk8v4` is experimental and lossy | `bf16` |
+| `--kv-dtype bf16\|int8\|rk8v4\|rk4v4\|rk4v4-e8\|rk2v4-e8` | KV-cache storage; the lattice/cylinder modes (`rk4v4-e8`, `rk2v4-e8`) are lossy but fit far more context; see the "Verified Context Ceilings Matrix" in the repository README for the measured ceilings | `bf16` |
 | `--spec mtp\|dflash` | speculative backend | off |
 | `--draft-tokens N` | MTP `1..5`; DFlash `1..15` | unset |
 | `--lm-head-draft` | optimized proposal head | off |
